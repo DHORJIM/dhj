@@ -71,6 +71,21 @@ SemaphoreHandle_t mutex = NULL;
 #define TIMER_MEDIDA_S 1
 
 
+
+// Estructura para intercambio de información con una tarea
+typedef struct
+{
+    void* pConfig;  // Configuración de la tarea
+    void* pDatos;   // Información para el proceso de la tarea
+} taskInfo_t;
+
+// Estructura para la info que se necesita para configurar la tarea
+typedef struct
+{
+    uint32_t periodo;         // Periodo entre activaciones
+    uint8_t  activa;          // Para indicar si la tarea está en el planificador
+} taskConfig_t;
+
 /*Estructura para manejar la medida*/
 typedef struct
 {
@@ -85,7 +100,7 @@ int timer_medida = 0;
 int timer_estabilizador = 0;
 
 /*Entrada digital que determina el pesaje activo o inactivo*/
-bool pesaje;
+int pesaje;
 
 
 static void i2c_master_init() {
@@ -206,62 +221,80 @@ void activa_modo_automatico(){
 }
 
 /*Vaciamos el deposito*/
-void vaciado (){
-    if (xSemaphoreTake(mutex, portMAX_DELAY)){
-    while(media>float(NIVEL_MINIMO)){
-         medida--; /*Vaciamos paulatinamente*/
+void vaciado (void* params){
+
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+
+    if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
+    while(pMedida->nivel>float(NIVEL_MINIMO)){
+         pMedida->nivel--; /*Vaciamos paulatinamente*/
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Vaciando deposito"); 
     }
-    if(medida<float(NIVEL_MINIMO)) medida = float(NIVEL_MINIMO); /*Si queda por debajo de minimo, corregimos*/
-    xSemaphoreGive(mutex);
+    if(pMedida->nivel<float(NIVEL_MINIMO)) pMedida->nivel = float(NIVEL_MINIMO); /*Si queda por debajo de minimo, corregimos*/
+    xSemaphoreGive(pMedida->sem);
     }
 }
 /*Comprobamos si el deposito esta vacio*/
 int deposito_vacio(void* params){
-    if (xSemaphoreTake(mutex, portMAX_DELAY)){
+
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+
+    if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
     float medida_aux; /*Creamos esta variable para evitar que el valor de la medida al llenar o vaciar cree un bucle infinito*/
-    medida_aux = medida;
-    medida = medida+0.001;
+    medida_aux = pMedida->nivel;
+    pMedida->nivel = pMedida->nivel+0.001;
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Deposito vacio"); 
-        xSemaphoreGive(mutex);
+        xSemaphoreGive(pMedida->sem);
     }
     return(medida_aux == float(NIVEL_MINIMO))
 }
 
 
 /*Llenamos el deposito*/
-void llenado (){
-    if (xSemaphoreTake(mutex, portMAX_DELAY)){
-    while(media<float(NIVEL_MAXIMO)){
+void llenado (void* params){
 
-    medida++; /*Vaciamos paulatinamente*/
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+    if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
+    while(pMedida->nivel<float(NIVEL_MAXIMO)){
+
+    pMedida->nivel++; /*Vaciamos paulatinamente*/
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Llenando deposito"); 
-    if(medida>float(NIVEL_MAXIMO)) medida = float(NIVEL_MAXIMO); /*Si queda por debajo de minimo, corregimos*/
-    xSemaphoreGive(mutex);
+    if(pMedida->nivel>float(NIVEL_MAXIMO)) pMedida->nivel = float(NIVEL_MAXIMO); /*Si queda por debajo de minimo, corregimos*/
+    xSemaphoreGive(pMedida->sem);
     }
 }
 /*Comprobamos si el deposito esta lleno*/
 int deposito_lleno(void* params){
-     if (xSemaphoreTake(mutex, portMAX_DELAY)){
+
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+     if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
     float medida_aux;
-    medida_aux = medida;
-    medida = medida-0.001;
+    medida_aux = pMedida->nivel;
+    pMedida->nivel = pMedida->nivel-0.001;
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Deposito lleno"); 
-    xSemaphoreGive(mutex);
+    xSemaphoreGive(pMedida->sem);
     }
-    return(medida == float(NIVEL_MAXIMO))
+    return(medida_aux == float(NIVEL_MAXIMO))
 }
 
 
@@ -276,48 +309,55 @@ int pulsador_emergencia_pulsado(void *params)
     return button_state;
 }
 
-int toma_medida_puntual(){
+int toma_medida_puntual(void* params){
 
-    if (xSemaphoreTake(mutex, portMAX_DELAY)){
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+
+    if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
     /*Ultimo valor medido*/
     float valor_actual;
      // En este ejemplo, se simula una medida aleatoria entre 0 y 10
     valor_actual = ((float)rand() / RAND_MAX) * 10.0f;
     /*Vemos si la medida actual es el valor maximo*/
     if(valor_actual == float(NIVEL_MAXIMO))
-        medida = float(NIVEL_MAXIMO)
+        pMedida->nivel = float(NIVEL_MAXIMO)
 
     else
-        medida = (media + valor_actual)/2.0;
+        pMedida->nivel = (pMedida->nivel + valor_actual)/2.0;
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Medida = %d", medida); /*Mostramos el valor de la medida por el display*/
-    xSemaphoreGive(mutex);
+    xSemaphoreGive(pMedida->sem);
     }
     return
     
 }
 
-int toma_medida_continuada(){
-    if (xSemaphoreTake(mutex, portMAX_DELAY)){
+int toma_medida_continuada(void* params){
+
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+    if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
     /*Ultimo valor medido*/
     float valor_actual;
      // En este ejemplo, se simula una medida aleatoria entre 0 y 10
     valor_actual = ((float)rand() / RAND_MAX) * 10.0f;
     /*Vemos si la medida actual es el valor maximo*/
     if(valor_actual == float(NIVEL_MAXIMO))
-        medida = float(NIVEL_MAXIMO)
+        pMedida->nivel = float(NIVEL_MAXIMO)
 
     else
-        medida = (media + valor_actual)/2.0;
+        pMedida->nivel = (pMedida->nivel + valor_actual)/2.0;
 
-    timer_medida_start();
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Medida = %d", medida); /*Mostramos el valor de la medida por el display*/
-    xSemaphoreGive(mutex);
+    xSemaphoreGive(pMedida->sem);
     }
     return    
 }
@@ -414,23 +454,45 @@ void app_main()
     }
 
     // Información de configuración de cada tarea
-    taskConfig_t tsk1_config, tsk2_config, tsk3_config;
-
+    taskConfig_t vaciado_config, deposito_vacio_config, llenado_config, deposito_lleno_config, medida_puntual_config, medida_continuada_config;
     // Estructura de paso de información a cada tarea
-    taskInfo_t tsk1_info, tsk2_info, tsk3_info;
+    taskInfo_t vaciado_info, deposito_vacio_info, llenado_info, deposito_lleno_info, medida_puntual_info, medida_continuada_info;
+   
+    // Configuración de cada tarea
+    vaciado_config.periodo = FSM_CYCLE_PERIOD_MS;
+    deposito_vacio_config.periodo = FSM_CYCLE_PERIOD_MS;
+    llenado_config.periodo = FSM_CYCLE_PERIOD_MS;
+    deposito_lleno_config.periodo = FSM_CYCLE_PERIOD_MS;
+    medida_puntual_config.periodo = FSM_CYCLE_PERIOD_MS;
+    medida_continuada_config.periodo = FSM_CYCLE_PERIOD_MS;
 
+    // Información completa de cada tarea
+    vaciado_info.pConfig = (void* )&vaciado_config;
+    vaciado_info.pDatos  = (void* )&medida;
 
+    deposito_vacio_info.pConfig = (void* )&deposito_vacio_config;
+    deposito_vacio_info.pDatos  = (void* )&medida;
 
+    llenado_info.pConfig = (void* )&llenado_config;
+    llenado_info.pDatos  = (void* )&medida;    
 
+    deposito_lleno_info.pConfig = (void* )&deposito_lleno_config;
+    deposito_lleno_info.pDatos  = (void* )&medida;
+
+    medida_puntual_info.pConfig = (void* )&medida_puntual_config;
+    medida_puntual_info.pDatos  = (void* )&medida;
+
+    medida_continuada_info.pConfig = (void* )&medida_continuada_config;
+    medida_continuada_info.pDatos  = (void* )&medida;
 
     /*Creamos las tareas que necesitaran del semaforo para ejecutarse haciendo uso de los datos compartidos por exc.mutua*/
     TaskHandle_t t_vaciado, t_dep_vacio,t_llenado,t_dep_lleno,t_medida_puntual,t_medida_continuada; //Manejadores de las tareas
-    xTaskCreate(vaciado,TAG_VACIADO,  2048, NULL, 4, &t_vaciado ); /*Creacion de la tarea de vaciado*/
-    xTaskCreate(deposito_vacio, TAG_DEP_VACIO,  2048, NULL, 4, &t_dep_vacio ); /*Creacion tarea deposito vacio*/
-    xTaskCreate(llenado, TAG_LLENADO,  2048, NULL, 4, &t_llenado ); /*Creacion de la tarea de llenado*/
-    xTaskCreate(deposito_lleno, TAG_DEPOSITO_LLENO,  2048, NULL, 4, &t_dep_lleno ); /*Creacion de la tarea de deposito lleno*/
-    xTaskCreate(toma_medida_puntual, TAG_MEDIDA_PUNTUAL,  2048, NULL, 4, &t_medida_puntual); /*Creacion tarea de toma de medida puntual*/
-    xTaskCreate(toma_medida_continuada, TAG_MEDIDA_CONTINUADA,  2048, NULL, 4, &t_medida_continuada); /*Creacion tarea de toma de medida continuada*/
+    xTaskCreate(vaciado,TAG_VACIADO,  2048, %vaciado_info, 4, &t_vaciado ); /*Creacion de la tarea de vaciado*/
+    xTaskCreate(deposito_vacio, TAG_DEP_VACIO,  2048, &deposito_vacio_info, 4, &t_dep_vacio ); /*Creacion tarea deposito vacio*/
+    xTaskCreate(llenado, TAG_LLENADO,  2048, %llenado_info, 4, &t_llenado ); /*Creacion de la tarea de llenado*/
+    xTaskCreate(deposito_lleno, TAG_DEPOSITO_LLENO,  2048, %deposito_lleno_info, 4, &t_dep_lleno ); /*Creacion de la tarea de deposito lleno*/
+    xTaskCreate(toma_medida_puntual, TAG_MEDIDA_PUNTUAL,  2048, &medida_puntual_info, 4, &t_medida_puntual); /*Creacion tarea de toma de medida puntual*/
+    xTaskCreate(toma_medida_continuada, TAG_MEDIDA_CONTINUADA,  2048, %medida_continuada_info, 4, &t_medida_continuada); /*Creacion tarea de toma de medida continuada*/
 
 
 
@@ -464,10 +526,11 @@ void app_main()
         vTaskDelayUntil(&last, pdMS_TO_TICKS(FSM_CYCLE_PERIOD_MS));
         }
         }
-       if(comando == LEVEL_MODO_AUTOMATICO) /*Si el modod es automatico, siempre se mide en modo continuado*/
+       if(comando == LEVEL_MODO_AUTOMATICO) {/*Si el modod es automatico, siempre se mide en modo continuado*/
         fsm_update (fsm_continuado);
         timer_medida_next();
         timer_estabilizador_next();
         vTaskDelayUntil(&last, pdMS_TO_TICKS(FSM_CYCLE_PERIOD_MS));
     }
+ }
 }
