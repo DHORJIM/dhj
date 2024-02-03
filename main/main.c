@@ -37,6 +37,7 @@ const char* TAG_MEDIDA_CONTINUADA = "medida_continuada";
 /* Pines GPIO asignados a la entrada (PULSADOR) y a la salida (LED) */
 #define GPIO_PIN_LED    25 // Pin asignado al LED en el estado de emergencia
 #define GPIO_PIN_BUTTON 26 // Pin asignado al pulsador de emergencia
+#define GPIO_PIN_BUTTON_MEDIDA 32 // Pin asignado al pulsador de parada de medida
 
 /* Estado de activación del pulsador (activo a nivel bajo) */
 #define BUTTON_LEVEL_ACTIVE 0
@@ -309,6 +310,16 @@ int pulsador_emergencia_pulsado(void *params)
     return button_state;
 }
 
+/* Comprueba si el pulsador de parada de medida está pulsado */
+int pulsador_emergencia_pulsado(void *params) 
+{ 
+    bool button_state = (BUTTON_LEVEL_ACTIVE == gpio_get_level(GPIO_PIN_BUTTON_MEDIDA));
+    ESP_LOGD(TAG, "Estado de pulsador: %d", gpio_get_level(GPIO_PIN_BUTTON_MEDIDA));
+    if (button_state) ESP_LOGI(TAG, "Pulsador parada medida pulsado");
+
+    return button_state;
+}
+
 int toma_medida_puntual(void* params){
 
     taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
@@ -318,8 +329,8 @@ int toma_medida_puntual(void* params){
     if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
     /*Ultimo valor medido*/
     float valor_actual;
-     // En este ejemplo, se simula una medida aleatoria entre 0 y 10
-    valor_actual = ((float)rand() / RAND_MAX) * 10.0f;
+     // En este ejemplo, se simula una medida aleatoria entre -1 y 1
+    valor_actual = ((float)rand() / RAND_MAX) * 2-1;
     /*Vemos si la medida actual es el valor maximo*/
     if(valor_actual == float(NIVEL_MAXIMO))
         pMedida->nivel = float(NIVEL_MAXIMO)
@@ -344,8 +355,8 @@ int toma_medida_continuada(void* params){
     if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
     /*Ultimo valor medido*/
     float valor_actual;
-     // En este ejemplo, se simula una medida aleatoria entre 0 y 10
-    valor_actual = ((float)rand() / RAND_MAX) * 10.0f;
+     // En este ejemplo, se simula una medida aleatoria entre -1 y 1
+    valor_actual = ((float)rand() / RAND_MAX) * 2-1;
     /*Vemos si la medida actual es el valor maximo*/
     if(valor_actual == float(NIVEL_MAXIMO))
         pMedida->nivel = float(NIVEL_MAXIMO)
@@ -365,6 +376,7 @@ int toma_medida_continuada(void* params){
 /* Activa el LED de salida y comienza su temporización */
 void led_estabilizacion_on (void* params)
 {
+    deshabilita_pesaje();
     ESP_LOGD(TAG, "Activa LED y comienza temporización para la estabilizacion");
     gpio_set_level(GPIO_PIN_LED, 1);
     timer_estabilizador_start();
@@ -375,6 +387,7 @@ void led_estabilizacion_off (void* fsm)
 {
     gpio_set_level(GPIO_PIN_LED, 0); /*Finaliza la estabilizacion y se desactiva el led*/
     ESP_LOGD(TAG, "Estabilizacion terminada");
+    habilita_pesaje();
 }
 
 /*Funcion que activa el nivel de pesaje*/
@@ -398,8 +411,12 @@ fsm_t* modo_puntual_new (void)
 {
     static fsm_trans_t puntual_tt[] = {
         {  0, pesaje_activo, 1, timer_medida_start},
-        {  1, timer_medida_expired, -1, toma_medida_puntual },
+        {  1, timer_medida_expired, 2, toma_medida_puntual },      
         {  1, pulsador_emergencia_pulsado, 5, led_estabilizacion_on},
+        {  2, deposito_lleno, 3, vaciado},  
+        {  2, deposito_vacio, 4, llenado},
+        {  3, deposito_vacio, -1, NULL},  
+        {  4, deposito_lleno, -1, NULL},
         {  5, timer_estabilizador_expired, -1, led_estabilizacion_off},
         { -1, NULL, -1, NULL },
     };
@@ -418,7 +435,9 @@ fsm_t* modo_continuado_new (void)
         {  2, deposito_vacio, 0, NULL},
         {  3, deposito_lleno, 0, NULL},
         {  1, pulsador_emergencia_pulsado, 5, led_estabilizacion_on},
+        {  1, pulsador_parada_medida, 6, NULL},
         {  5, timer_estabilizador_expired, -1, led_estabilizacion_off},
+        {  6, timer_medida_expired, -1, toma_medida_puntual},       
         { -1, NULL, -1, NULL },
     };
     return fsm_new (continuado_tt);
