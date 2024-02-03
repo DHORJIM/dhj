@@ -24,6 +24,7 @@ const char* TAG_LLENADO = "llenado";
 const char* TAG_DEPOSITO_LLENO = "deposito lleno";
 const char* TAG_MEDIDA_PUNTUAL = "medida puntual";
 const char* TAG_MEDIDA_CONTINUADA = "medida_continuada";
+const char* TAG_NO_LLENO_NO_VACIO = "deposito ni lleno ni vacio";
 
 // Comandos del display LCD
 #define LCD_CMD_CLEAR           0x01
@@ -257,8 +258,27 @@ int deposito_vacio(void* params){
     lcd_print("Deposito vacio"); 
         xSemaphoreGive(pMedida->sem);
     }
-    return(medida_aux == float(NIVEL_MINIMO))
+    return(medida_aux == float(NIVEL_MINIMO));
 }
+
+
+/*Comprobamos si el deposito no esta ni lleno ni vacio*/
+int deposito_no_lleno_no_vacio(void* params){
+
+    taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
+    MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
+
+
+    if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
+    float medida_aux; /*Creamos esta variable para evitar que el valor de la medida al llenar o vaciar cree un bucle infinito*/
+    medida_aux = pMedida->nivel;
+        xSemaphoreGive(pMedida->sem);
+    }
+    return(medida_aux != float(NIVEL_MINIMO) && medida_aux != float(NIVEL_MAXIMO));
+}
+
+
+
 
 
 /*Llenamos el deposito*/
@@ -295,7 +315,7 @@ int deposito_lleno(void* params){
     lcd_print("Deposito lleno"); 
     xSemaphoreGive(pMedida->sem);
     }
-    return(medida_aux == float(NIVEL_MAXIMO))
+    return(medida_aux == float(NIVEL_MAXIMO));
 }
 
 
@@ -343,7 +363,7 @@ int toma_medida_puntual(void* params){
     lcd_print("Medida = %d", medida); /*Mostramos el valor de la medida por el display*/
     xSemaphoreGive(pMedida->sem);
     }
-    return
+    return();
     
 }
 
@@ -370,7 +390,7 @@ int toma_medida_continuada(void* params){
     lcd_print("Medida = %d", medida); /*Mostramos el valor de la medida por el display*/
     xSemaphoreGive(pMedida->sem);
     }
-    return    
+    return();    
 }
 
 /* Activa el LED de salida y comienza su temporización */
@@ -413,6 +433,7 @@ fsm_t* modo_puntual_new (void)
         {  0, pesaje_activo, 1, timer_medida_start},
         {  1, timer_medida_expired, 2, toma_medida_puntual },      
         {  1, pulsador_emergencia_pulsado, 5, led_estabilizacion_on},
+        {  2, deposito_no_lleno_no_vacio, -1, NULL},  
         {  2, deposito_lleno, 3, vaciado},  
         {  2, deposito_vacio, 4, llenado},
         {  3, deposito_vacio, -1, NULL},  
@@ -474,8 +495,10 @@ void app_main()
 
     // Información de configuración de cada tarea
     taskConfig_t vaciado_config, deposito_vacio_config, llenado_config, deposito_lleno_config, medida_puntual_config, medida_continuada_config;
+    taskConfig_t no_lleno_no_vacio_config;
     // Estructura de paso de información a cada tarea
     taskInfo_t vaciado_info, deposito_vacio_info, llenado_info, deposito_lleno_info, medida_puntual_info, medida_continuada_info;
+    taskInfo_t no_lleno_no_vacio_info;
    
     // Configuración de cada tarea
     vaciado_config.periodo = FSM_CYCLE_PERIOD_MS;
@@ -484,6 +507,7 @@ void app_main()
     deposito_lleno_config.periodo = FSM_CYCLE_PERIOD_MS;
     medida_puntual_config.periodo = FSM_CYCLE_PERIOD_MS;
     medida_continuada_config.periodo = FSM_CYCLE_PERIOD_MS;
+    no_lleno_no_vacio_config.periodo = FSM_CYCLE_PERIOD_MS;
 
     // Información completa de cada tarea
     vaciado_info.pConfig = (void* )&vaciado_config;
@@ -504,14 +528,18 @@ void app_main()
     medida_continuada_info.pConfig = (void* )&medida_continuada_config;
     medida_continuada_info.pDatos  = (void* )&medida;
 
+    no_lleno_no_vacio_info.pConfig = (void* )&no_lleno_no_vacio_config;
+    no_lleno_no_vacio_info.pDatos  = (void* )&medida;
+
     /*Creamos las tareas que necesitaran del semaforo para ejecutarse haciendo uso de los datos compartidos por exc.mutua*/
-    TaskHandle_t t_vaciado, t_dep_vacio,t_llenado,t_dep_lleno,t_medida_puntual,t_medida_continuada; //Manejadores de las tareas
+    TaskHandle_t t_vaciado, t_dep_vacio,t_llenado,t_dep_lleno,t_medida_puntual,t_medida_continuada,t_no_lleno_no_vacio; //Manejadores de las tareas
     xTaskCreate(vaciado,TAG_VACIADO,  2048, %vaciado_info, 4, &t_vaciado ); /*Creacion de la tarea de vaciado*/
     xTaskCreate(deposito_vacio, TAG_DEP_VACIO,  2048, &deposito_vacio_info, 4, &t_dep_vacio ); /*Creacion tarea deposito vacio*/
     xTaskCreate(llenado, TAG_LLENADO,  2048, %llenado_info, 4, &t_llenado ); /*Creacion de la tarea de llenado*/
     xTaskCreate(deposito_lleno, TAG_DEPOSITO_LLENO,  2048, %deposito_lleno_info, 4, &t_dep_lleno ); /*Creacion de la tarea de deposito lleno*/
     xTaskCreate(toma_medida_puntual, TAG_MEDIDA_PUNTUAL,  2048, &medida_puntual_info, 4, &t_medida_puntual); /*Creacion tarea de toma de medida puntual*/
     xTaskCreate(toma_medida_continuada, TAG_MEDIDA_CONTINUADA,  2048, %medida_continuada_info, 4, &t_medida_continuada); /*Creacion tarea de toma de medida continuada*/
+    xTaskCreate(deposito_no_lleno_no_vacio  , TAG_NO_LLENO_NO_VACIO,  2048, %no_lleno_no_vacio_info, 4, &t_no_lleno_no_vacio); /*Creacion tarea de toma de medida continuada*/
 
 
 
