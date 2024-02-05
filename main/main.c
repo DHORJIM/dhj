@@ -87,7 +87,6 @@ typedef struct
 typedef struct
 {
     uint32_t periodo;         // Periodo entre activaciones
-    uint8_t  activa;          // Para indicar si la tarea está en el planificador
 } taskConfig_t;
 
 /*Estructura para manejar la medida*/
@@ -432,7 +431,8 @@ fsm_t* modo_continuado_new (void)
 {
     static fsm_trans_t continuado_tt[] = {
         {  0, pesaje_activo, 1, timer_medida_start },
-        {  1, timer_medida_expired, 1, toma_medida_continuada},
+        {  1, timer_medida_expired, 7, toma_medida_continuada},
+        {  7, 1, 1, timer_medida_start},
         {  1, deposito_lleno, 2, vaciado},
         {  1, deposito_vacio, 3, llenado},
         {  1, pulsador_emergencia_pulsado, 5, led_estabilizacion_on},
@@ -519,13 +519,13 @@ void app_main()
 
     /*Creamos las tareas que necesitaran del semaforo para ejecutarse haciendo uso de los datos compartidos por exc.mutua*/
     TaskHandle_t t_vaciado, t_dep_vacio,t_llenado,t_dep_lleno,t_medida_puntual,t_medida_continuada,t_no_lleno_no_vacio; //Manejadores de las tareas
-    xTaskCreate(vaciado,TAG_VACIADO,  2048, %vaciado_info, 4, &t_vaciado ); /*Creacion de la tarea de vaciado*/
+    xTaskCreate(vaciado,TAG_VACIADO,  2048, &vaciado_info, 4, &t_vaciado ); /*Creacion de la tarea de vaciado*/
     xTaskCreate(deposito_vacio, TAG_DEP_VACIO,  2048, &deposito_vacio_info, 4, &t_dep_vacio ); /*Creacion tarea deposito vacio*/
-    xTaskCreate(llenado, TAG_LLENADO,  2048, %llenado_info, 4, &t_llenado ); /*Creacion de la tarea de llenado*/
-    xTaskCreate(deposito_lleno, TAG_DEPOSITO_LLENO,  2048, %deposito_lleno_info, 4, &t_dep_lleno ); /*Creacion de la tarea de deposito lleno*/
+    xTaskCreate(llenado, TAG_LLENADO,  2048, &llenado_info, 4, &t_llenado ); /*Creacion de la tarea de llenado*/
+    xTaskCreate(deposito_lleno, TAG_DEPOSITO_LLENO,  2048, &deposito_lleno_info, 4, &t_dep_lleno ); /*Creacion de la tarea de deposito lleno*/
     xTaskCreate(toma_medida_puntual, TAG_MEDIDA_PUNTUAL,  2048, &medida_puntual_info, 4, &t_medida_puntual); /*Creacion tarea de toma de medida puntual*/
-    xTaskCreate(toma_medida_continuada, TAG_MEDIDA_CONTINUADA,  2048, %medida_continuada_info, 4, &t_medida_continuada); /*Creacion tarea de toma de medida continuada*/
-    xTaskCreate(deposito_no_lleno_no_vacio  , TAG_NO_LLENO_NO_VACIO,  2048, %no_lleno_no_vacio_info, 4, &t_no_lleno_no_vacio); /*Creacion tarea de toma de medida continuada*/
+    xTaskCreate(toma_medida_continuada, TAG_MEDIDA_CONTINUADA,  2048, &medida_continuada_info, 4, &t_medida_continuada); /*Creacion tarea de toma de medida continuada*/
+    xTaskCreate(deposito_no_lleno_no_vacio  , TAG_NO_LLENO_NO_VACIO,  2048, &no_lleno_no_vacio_info, 4, &t_no_lleno_no_vacio); /*Creacion tarea de toma de medida continuada*/
 
 
 
@@ -539,7 +539,6 @@ void app_main()
     TickType_t last = xTaskGetTickCount();
 
     while (true) {
-        habilita_pesaje();
         /*Pedimos modo de funcionamiento por consola de comandos*/
         printf("Introdce 0 para funcionamiento manual, o 1 para funcionamiento automatico: ");
         scanf("%d", &comando);
