@@ -72,6 +72,8 @@ SemaphoreHandle_t mutex = NULL;
 #define TIMER_ESTABILIZADOR_S 5
 #define TIMER_MEDIDA_S 1
 
+/*Creamos esta variable para evitar que el valor de la medida al llenar o vaciar cree un bucle infinito*/
+float medida_aux; 
 
 
 // Estructura para intercambio de información con una tarea
@@ -124,7 +126,7 @@ static void lcd_send_command(uint8_t command) {
     i2c_master_write_byte(cmd, (LCD_ADDR << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write_byte(cmd, command, true);
     i2c_master_stop(cmd);
-    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS);
     i2c_cmd_link_delete(cmd);
 }
 
@@ -135,7 +137,7 @@ static void lcd_send_data(uint8_t data) {
     i2c_master_write_byte(cmd, 0x40, true);
     i2c_master_write_byte(cmd, data, true);
     i2c_master_stop(cmd);
-    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_RATE_MS);
+    i2c_master_cmd_begin(I2C_NUM_0, cmd, 1000 / portTICK_PERIOD_MS);
     i2c_cmd_link_delete(cmd);
 }
 
@@ -202,7 +204,7 @@ void timer_medida_start(void)
 void timer_estabilizador_next(void)
 {
     if (timer_estabilizador) --timer_estabilizador;
-    ESP_LOGD(TAG, "Tiempo restante de estabilizacion: %d", timer);
+    ESP_LOGD(TAG, "Tiempo restante de estabilizacion: %d", timer_estabilizador);
 
 }
 /* Decrementa el tiempo que la salida debe permanecer activa */
@@ -211,16 +213,6 @@ void timer_medida_next(void)
     if (timer_medida) --timer_medida;
 }
 
-/*Funciones de activacion de modo manual y automatico*/
-void activa_modo_manual(){
-
-    comando=LEVEL_MODO_MANUAL;
-}
-
-void activa_modo_automatico(){
-
-    comando=LEVEL_MODO_AUTOMATICO;
-}
 
 /*Vaciamos el deposito*/
 void vaciado (void* params){
@@ -230,14 +222,14 @@ void vaciado (void* params){
 
 
     if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
-    while(pMedida->nivel>float(NIVEL_MINIMO)){
+    while((pMedida->nivel)>(float)NIVEL_MINIMO){
          pMedida->nivel--; /*Vaciamos paulatinamente*/
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Vaciando deposito"); 
     }
-    if(pMedida->nivel<float(NIVEL_MINIMO)) pMedida->nivel = float(NIVEL_MINIMO); /*Si queda por debajo de minimo, corregimos*/
+    if((pMedida->nivel)<(float)NIVEL_MINIMO) pMedida->nivel = (float)NIVEL_MINIMO; /*Si queda por debajo de minimo, corregimos*/
     xSemaphoreGive(pMedida->sem);
     }
 }
@@ -249,7 +241,6 @@ int deposito_vacio(void* params){
 
 
     if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
-    float medida_aux; /*Creamos esta variable para evitar que el valor de la medida al llenar o vaciar cree un bucle infinito*/
     medida_aux = pMedida->nivel;
     pMedida->nivel = pMedida->nivel+0.001;
     lcd_send_command(LCD_CMD_CLEAR);
@@ -258,7 +249,7 @@ int deposito_vacio(void* params){
     lcd_print("Deposito vacio"); 
         xSemaphoreGive(pMedida->sem);
     }
-    return(medida_aux == float(NIVEL_MINIMO));
+    return(medida_aux == (float)NIVEL_MINIMO);
 }
 
 
@@ -274,7 +265,7 @@ int deposito_no_lleno_no_vacio(void* params){
     medida_aux = pMedida->nivel;
         xSemaphoreGive(pMedida->sem);
     }
-    return(medida_aux != float(NIVEL_MINIMO) && medida_aux != float(NIVEL_MAXIMO));
+    return(medida_aux != (float)NIVEL_MINIMO && medida_aux != (float)NIVEL_MAXIMO);
 }
 
 
@@ -288,14 +279,14 @@ void llenado (void* params){
     MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
 
     if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
-    while(pMedida->nivel<float(NIVEL_MAXIMO)){
+    while(pMedida->nivel<(float)NIVEL_MAXIMO){
 
     pMedida->nivel++; /*Vaciamos paulatinamente*/
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
     lcd_print("Llenando deposito"); 
-    if(pMedida->nivel>float(NIVEL_MAXIMO)) pMedida->nivel = float(NIVEL_MAXIMO); /*Si queda por debajo de minimo, corregimos*/
+    if(pMedida->nivel>(float)NIVEL_MAXIMO) pMedida->nivel = (float)NIVEL_MAXIMO; /*Si queda por debajo de minimo, corregimos*/
     xSemaphoreGive(pMedida->sem);
     }
 }
@@ -306,7 +297,6 @@ int deposito_lleno(void* params){
     MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
 
      if (xSemaphoreTake(pMedida->sem, portMAX_DELAY)){
-    float medida_aux;
     medida_aux = pMedida->nivel;
     pMedida->nivel = pMedida->nivel-0.001;
     lcd_send_command(LCD_CMD_CLEAR);
@@ -315,7 +305,7 @@ int deposito_lleno(void* params){
     lcd_print("Deposito lleno"); 
     xSemaphoreGive(pMedida->sem);
     }
-    return(medida_aux == float(NIVEL_MAXIMO));
+    return(medida_aux == (float)NIVEL_MAXIMO);
 }
 
 
@@ -331,7 +321,7 @@ int pulsador_emergencia_pulsado(void *params)
 }
 
 /* Comprueba si el pulsador de parada de medida está pulsado */
-int pulsador_emergencia_pulsado(void *params) 
+int pulsador_parada_medida(void *params) 
 { 
     bool button_state = (BUTTON_LEVEL_ACTIVE == gpio_get_level(GPIO_PIN_BUTTON_MEDIDA));
     ESP_LOGD(TAG, "Estado de pulsador: %d", gpio_get_level(GPIO_PIN_BUTTON_MEDIDA));
@@ -340,7 +330,7 @@ int pulsador_emergencia_pulsado(void *params)
     return button_state;
 }
 
-int toma_medida_puntual(void* params){
+void toma_medida_puntual(void* params){
 
     taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
     MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
@@ -352,22 +342,22 @@ int toma_medida_puntual(void* params){
      // En este ejemplo, se simula una medida aleatoria entre -1 y 1
     valor_actual = ((float)rand() / RAND_MAX) * 2-1;
     /*Vemos si la medida actual es el valor maximo*/
-    if(valor_actual == float(NIVEL_MAXIMO))
-        pMedida->nivel = float(NIVEL_MAXIMO)
+    if(valor_actual == (float)NIVEL_MAXIMO) {
+        pMedida->nivel = (float)NIVEL_MAXIMO;}
 
-    else
-        pMedida->nivel = (pMedida->nivel + valor_actual)/2.0;
+    else {
+        pMedida->nivel = (pMedida->nivel + valor_actual)/2.0;}
+
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
-    lcd_print("Medida = %d", medida); /*Mostramos el valor de la medida por el display*/
+    lcd_print("Medida = "); /*Mostramos el valor de la medida por el display*/
+    lcd_print((int)pMedida->nivel);
     xSemaphoreGive(pMedida->sem);
-    }
-    return();
-    
+    }  
 }
 
-int toma_medida_continuada(void* params){
+void toma_medida_continuada(void* params){
 
     taskConfig_t* pConfig = ((taskInfo_t *)params)->pConfig;
     MedidaInfo_t*    pMedida    = ((taskInfo_t *)params)->pDatos;
@@ -378,25 +368,25 @@ int toma_medida_continuada(void* params){
      // En este ejemplo, se simula una medida aleatoria entre -1 y 1
     valor_actual = ((float)rand() / RAND_MAX) * 2-1;
     /*Vemos si la medida actual es el valor maximo*/
-    if(valor_actual == float(NIVEL_MAXIMO))
-        pMedida->nivel = float(NIVEL_MAXIMO)
+    if(valor_actual == (float)NIVEL_MAXIMO){
+        pMedida->nivel = (float)NIVEL_MAXIMO;}
 
-    else
-        pMedida->nivel = (pMedida->nivel + valor_actual)/2.0;
+    else{
+         pMedida->nivel = (pMedida->nivel + valor_actual)/2.0;}
 
     lcd_send_command(LCD_CMD_CLEAR);
     vTaskDelay(pdMS_TO_TICKS(2));
 
-    lcd_print("Medida = %d", medida); /*Mostramos el valor de la medida por el display*/
+    lcd_print("Medida ="); /*Mostramos el valor de la medida por el display*/
+    lcd_print((int)pMedida->nivel);
     xSemaphoreGive(pMedida->sem);
     }
-    return();    
 }
 
 /* Activa el LED de salida y comienza su temporización */
 void led_estabilizacion_on (void* params)
 {
-    deshabilita_pesaje();
+    pesaje = PESAJE_LEVEL_INACTIVE; /*Deshabilita pesaje*/
     ESP_LOGD(TAG, "Activa LED y comienza temporización para la estabilizacion");
     gpio_set_level(GPIO_PIN_LED, 1);
     timer_estabilizador_start();
@@ -407,22 +397,11 @@ void led_estabilizacion_off (void* fsm)
 {
     gpio_set_level(GPIO_PIN_LED, 0); /*Finaliza la estabilizacion y se desactiva el led*/
     ESP_LOGD(TAG, "Estabilizacion terminada");
-    habilita_pesaje();
+    pesaje = PESAJE_LEVEL_ACTIVE; /*Habilitamos pesaje*/
 }
 
-/*Funcion que activa el nivel de pesaje*/
-void habilita_pesaje(){
-
-    pesaje = PESAJE_LEVEL_ACTIVE;
-}
-
-/*Funcion que inhabilita pesaje*/
-void deshabilita_pesaje(){
-
-    pesaje = PESAJE_LEVEL_INACTIVE;
-}
-int pesaje_activo(void* params){
-    return(pesaje = PESAJE_LEVEL_ACTIVE); /*Comprobamos si el pesaje se encuentra activo*/
+int pesaje_activo(){
+    return pesaje ; /*Comprobamos si el pesaje se encuentra activo*/
 }
 
 
@@ -475,6 +454,8 @@ void app_main()
     /*Inicializacion del maestro en el protocolo I2C, asi como del lcd*/
     i2c_master_init();
     lcd_init();
+
+    pesaje = PESAJE_LEVEL_ACTIVE; /*Inicializamos el pesaje*/
 
     int comando; /*Numero entero como interprete de comando introducido por la consola*/
     /* Prepara la entrada y la salida */
